@@ -4,6 +4,18 @@
   "description": "Terminal hub for DeepSeek Harness: one sidebar panel that lists the terminals of every session, shows their status, and jumps to the session that owns them.",
   "type": "module",
   "license": "MIT",
+  "author": "faronzz <faronzz@163.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/farons/dsh-terminal-hub.git"
+  },
+  "homepage": "https://github.com/farons/dsh-terminal-hub#readme",
+  "bugs": {
+    "url": "https://github.com/farons/dsh-terminal-hub/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
