@@ -1,0 +1,18 @@
+# 依赖与构建产物
+node_modules/
+pnpm-lock.yaml
+
+# 本地备份（我每次改动前的 .bak）
+*.bak
+*.bak2
+*.bak-*
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地临时产物
+*.log
+_scratch/
