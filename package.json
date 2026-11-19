@@ -1,7 +1,7 @@
 {
   "name": "dsh-terminal-hub",
-  "version": "0.1.0",
-  "description": "Terminal hub for DeepSeek Harness: one sidebar panel that lists the terminals of every session, shows their status, and jumps to the session that owns them.",
+  "version": "0.2.0",
+  "description": "Terminal hub for DeepSeek Harness: one sidebar panel that lists the terminals of every session, shows their status, and opens the session with that terminal selected.",
   "type": "module",
   "license": "MIT",
   "author": "faronzz <faronzz@163.com>",
@@ -26,6 +26,7 @@
     "client.js",
     "cordis.patch.yml",
     "README.md",
+    "README.zh.md",
     "LICENSE"
   ],
   "keywords": [
@@ -35,6 +36,9 @@
     "session",
     "sidebar"
   ],
+  "scripts": {
+    "test": "node --test"
+  },
   "engines": {
     "dsh": ">=0.2.0"
   },
@@ -51,6 +55,7 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
         "@deepseek-ai/dsh-client-ui-workspace"
       ]
     }

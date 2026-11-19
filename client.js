@@ -21,10 +21,10 @@
  *   panel — the DSH terminal header keeps its own title.
  *
  * Round 3 adds a second, read-only tab and separates the two names:
- * - Each terminal row shows a display name (显示名) first, with the Host's own
- *   title (真实标题) always visible as the grey sub line; one search box filters
+ * - Each terminal row shows a display name first, with the Host's own title (the
+ *   real title) always visible as the grey sub line; one search box filters
  *   both tabs by every name, tag, directory and Session.
- * - The 主机 tab lists the launcher candidates the terminal controller actually
+ * - The Hosts tab lists the launcher candidates the terminal controller actually
  *   registered — read through `ctx.webTerminals.launchShells` first and the raw
  *   `remote.terminal.shells` behind it — so the tab carries no configuration of
  *   its own and never drifts from the system. Rows are read-only: the candidate's
@@ -34,6 +34,20 @@
  * - A refused read (the Gateway authorises the resolved agent against the calling
  *   connection) leaves the tab empty with the failing `code: message` on screen,
  *   never a silently blank list.
+ *
+ * Round 4 targets the terminal, not just the Session:
+ * - A row click now carries the Host terminal id through the deferred jump. After
+ *   `openSession` the panel is gone, so the remaining work runs on services alone:
+ *   wait for the Session's right sidebar seat to mount, resolve the tab bound to
+ *   that terminal from the cross-Session tab inventory (`openTabs`) and the
+ *   controller bindings (`boundTerminal`), expand the column if it is collapsed,
+ *   and select the tab. A terminal with no tab gets one only while it is running,
+ *   opened with `openTabIn(...{ params: { terminalId } })` and bound, which is the
+ *   path the official terminal UI uses for Agent terminals.
+ * - Sidebar commands address the store the seat mints when it renders, so every
+ *   step is polled against a deadline and read back (`active()`), never assumed:
+ *   an unadopted surface silently ignores `focus`. When no `sidebarRight` service
+ *   exists the jump degrades to the previous Session-only behaviour.
  *
  * The factory below is free of side effects: every registration happens inside
  * `apply`, and each disposable it creates rides the caller's Cordis fiber.
@@ -63,6 +77,10 @@ window.__ModuleLoader__.load({
     const TAG_MAX = 16
     /** A single click opens the Session; a second click inside this window means rename. */
     const JUMP_DELAY_MS = 260
+    /** How long one jump may spend waiting for the Session's right sidebar to mount. */
+    const JUMP_TIMEOUT_MS = 4000
+    /** Poll interval while waiting for that mount and for the focus to take effect. */
+    const JUMP_POLL_MS = 50
     /** The panel's two views: the terminal overview and the read-only host list. */
     const TAB_TERMINALS = 'terminals'
     const TAB_HOSTS = 'hosts'
@@ -86,7 +104,7 @@ window.__ModuleLoader__.load({
     const zh = {
       'panel.label': '终端总览',
       'panel.title': '终端总览',
-      'panel.intro': '这里列出所有会话的终端，并可查看终端控制器注册的启动器。单击一条终端跳到它所属的会话，双击标题可原地设置显示名。',
+      'panel.intro': '这里列出所有会话的终端，并可查看终端控制器注册的启动器。单击一条终端，切到它所属的会话并在右侧栏选中这个终端；双击标题可原地设置显示名。',
       'panel.missing': '面板缺少客户端服务：{services}。这是插件依赖问题，请重新安装或更新插件。',
       'panel.loading': '正在读取会话的终端…',
       'panel.empty': '没有找到任何终端。系统里所有会话目前都没有活着的终端。',
@@ -109,7 +127,7 @@ window.__ModuleLoader__.load({
       'terminal.state.failed': '已失败',
       'terminal.origin.agent': 'Agent 启动',
       'terminal.origin.user': '用户启动',
-      'terminal.row.hint': '跳转到该终端所属的会话（双击标题改显示名）',
+      'terminal.row.hint': '切到该终端所属的会话并选中这个终端（折叠的右侧栏会自动展开；双击标题改显示名）',
       'term.tools': '更多操作',
       'term.ids': '终端 id：{id}',
       'term.paths': 'shell：{shell}\n启动目录：{cwd}',
@@ -138,6 +156,7 @@ window.__ModuleLoader__.load({
       'err.methodMissing': '客户端没有 remote.terminal.{method} 方法，未执行任何操作（无静默降级）。',
       'err.unexpectedResult': '返回值不是 RemoteResult：{value}',
       'err.threw': '{message}',
+      'err.crossSession': '该终端属于其它会话；网关只允许操作当前会话的终端。先跳到它所属的会话，再试一次。',
       'color.red': '红',
       'color.yellow': '黄',
       'color.green': '绿',
@@ -163,7 +182,7 @@ window.__ModuleLoader__.load({
     const en = {
       'panel.label': 'Terminal hub',
       'panel.title': 'Terminal hub',
-      'panel.intro': 'Every terminal of every session, plus the launcher candidates the terminal controller registered. Click a terminal row to jump to its session; double-click a title to set its display name.',
+      'panel.intro': 'Every terminal of every session, plus the launcher candidates the terminal controller registered. Click a terminal row to open its session with that terminal selected; double-click a title to set its display name.',
       'panel.missing': 'The panel is missing client services: {services}. This is a plugin dependency problem; reinstall or update the plugin.',
       'panel.loading': 'Reading terminals of every session…',
       'panel.empty': 'No terminals found. No session currently keeps a live terminal.',
@@ -186,7 +205,7 @@ window.__ModuleLoader__.load({
       'terminal.state.failed': 'failed',
       'terminal.origin.agent': 'started by agent',
       'terminal.origin.user': 'started by user',
-      'terminal.row.hint': 'Jump to the session that owns this terminal (double-click the title to edit its display name)',
+      'terminal.row.hint': 'Open the session that owns this terminal and select it (a collapsed right sidebar expands; double-click the title to edit its display name)',
       'term.tools': 'More actions',
       'term.ids': 'terminal id: {id}',
       'term.paths': 'shell: {shell}\nstart directory: {cwd}',
@@ -215,6 +234,7 @@ window.__ModuleLoader__.load({
       'err.methodMissing': 'This client has no remote.terminal.{method} method; nothing was sent (no silent fallback).',
       'err.unexpectedResult': 'The call did not return a RemoteResult: {value}',
       'err.threw': '{message}',
+      'err.crossSession': 'This terminal belongs to another session; the gateway only allows operating terminals of the current session. Jump to its session first, then try again.',
       'color.red': 'red',
       'color.yellow': 'yellow',
       'color.green': 'green',
@@ -630,12 +650,15 @@ window.__ModuleLoader__.load({
       const uiWorkspace = serviceOf(ctx, 'uiWorkspace')
       const layout = serviceOf(ctx, 'layout')
       const webTerminals = serviceOf(ctx, 'webTerminals')
+      // Optional: without it a jump still switches Sessions, it just cannot
+      // select the terminal's tab (see revealTerminalTab).
+      const sidebarRight = serviceOf(ctx, 'sidebarRight')
       const remote = serviceOf(ctx, 'remote')
       const terminalRemote = terminalRemoteOf(ctx, remote)
       if (!sessions || !sessions.list || typeof sessions.list.getSnapshot !== 'function') missing.push('sessions')
       if (!uiWorkspace || typeof uiWorkspace.openSession !== 'function') missing.push('uiWorkspace')
       if (!terminalRemote) missing.push('remote.terminal')
-      return { sessions, uiWorkspace, layout, webTerminals, remote, terminalRemote, missing }
+      return { sessions, uiWorkspace, layout, webTerminals, sidebarRight, remote, terminalRemote, missing }
     }
 
     /** Catalog rows of every listed Session, in the Host's own order. */
@@ -807,7 +830,7 @@ window.__ModuleLoader__.load({
         return {
           ok: false,
           code: 'hub/cross-session-blocked',
-          message: '该终端属于其它会话，网关只允许操作当前会话的终端。请先点这一行跳转到该会话，再执行操作。',
+          message: 'this terminal belongs to another Session; the Gateway only allows terminals of the calling Session',
         }
       }
       return { ok: false, code: 'client/all-shapes-failed', message: failures.join('  |  ') }
@@ -899,7 +922,7 @@ window.__ModuleLoader__.load({
       return terminal.title
     }
 
-    // ── names: 显示名 / 真实标题 ─────────────────────────────────────────────
+    // ── names: display name / real title ─────────────────────────────────────
 
     /** Leading characters of a terminal id, for the last-resort name. */
     function shortIdOf(id) {
@@ -907,7 +930,7 @@ window.__ModuleLoader__.load({
       return text.length <= SHORT_ID_LENGTH ? text : text.slice(0, SHORT_ID_LENGTH)
     }
 
-    /** The Host's own title (真实标题), including a rename the roster has not shown yet. */
+    /** The Host's own title (the real title), including a rename the roster has not shown yet. */
     function realTitleOf(terminal, record) {
       if (record && typeof record.hostTitle === 'string' && record.hostTitle !== ''
         && record.hostTitleFrom === terminal.title) return record.hostTitle
@@ -916,7 +939,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Main row title: 显示名 first, then the real title, then `shell · short id`, so
+     * Main row title: the display name first, then the real title, then `shell · short id`, so
      * a row is never nameless even when the Host titled it with a blank string.
      */
     function primaryTitleOf(terminal, record) {
@@ -1126,6 +1149,214 @@ window.__ModuleLoader__.load({
         // A timer that already fired needs no cancellation.
       }
     }
+
+    // ── per-terminal jump ────────────────────────────────────────────────────
+    // The panel navigates by Session, but a terminal is shown by a tab of the
+    // right sidebar. These helpers bridge the two: they resolve the Host terminal
+    // id the panel lists to the sidebar tab bound to it, and only touch services
+    // (never React state), because `openSession` closes the panel before they run.
+    // Kept free of React and of this file's component state so the block between
+    // the sentinels can be evaluated by a Node test on its own.
+
+    // BEGIN terminal-jump helpers
+    /** Wait one poll interval without blocking the event loop. */
+    function delay(ms) {
+      return new Promise((resolve) => {
+        scheduleTimeout(resolve, ms)
+      })
+    }
+
+    /** One Session's committed sidebar tabs; empty until its store has been adopted. */
+    function tabsInOf(sidebarRight, sessionId) {
+      try {
+        const tabs = sidebarRight.tabsIn(sessionId)
+        return Array.isArray(tabs) ? tabs : []
+      } catch {
+        return []
+      }
+    }
+
+    /** The terminal id recorded in a sidebar tab's navigation parameters, if any. */
+    function navigationTerminalIdOf(sidebarRight, sessionId, tabId) {
+      try {
+        const domain = sidebarRight.tabDomain
+        if (!domain || typeof domain.occurrence !== 'function') return undefined
+        const occurrence = domain.occurrence(sessionId, { id: tabId })
+        const navigation = occurrence && occurrence.navigation
+        const params = navigation && typeof navigation.getSnapshot === 'function'
+          ? navigation.getSnapshot().params
+          : undefined
+        if (!params || params.terminalId === undefined) return undefined
+        return String(params.terminalId)
+      } catch {
+        return undefined
+      }
+    }
+
+    /**
+     * Whether one sidebar tab is the tab of this Host terminal. The controller's
+     * binding is the authority (the body attaches to it); the navigation
+     * parameters are the fallback for a tab whose body never mounted here.
+     */
+    function tabShowsTerminal(sidebarRight, webTerminals, sessionId, tabId, contentId, terminalId) {
+      if (webTerminals && typeof webTerminals.boundTerminal === 'function') {
+        try {
+          if (webTerminals.boundTerminal(sessionId, contentId) === terminalId) return true
+        } catch {
+          // Fall through to the recorded navigation parameters.
+        }
+      }
+      return navigationTerminalIdOf(sidebarRight, sessionId, tabId) === terminalId
+    }
+
+    /**
+     * Terminal-kind tabs of one Session, from the saved-layout inventory and the
+     * live layout. The inventory covers Sessions whose seat has not rendered yet,
+     * which is exactly the cross-Session case this panel exists for.
+     */
+    function terminalTabsOf(sidebarRight, sessionId) {
+      const byId = new Map()
+      try {
+        const source = sidebarRight.openTabs
+        const inventory = source && typeof source.getSnapshot === 'function' ? source.getSnapshot() : undefined
+        if (Array.isArray(inventory)) {
+          for (const entry of inventory) {
+            if (entry && entry.sessionId === sessionId && entry.kind === 'terminal' && typeof entry.tabId === 'string') {
+              byId.set(entry.tabId, { tabId: entry.tabId, contentId: entry.contentId })
+            }
+          }
+        }
+      } catch {
+        // The inventory is only a hint; the live layout below is authoritative.
+      }
+      for (const tab of tabsInOf(sidebarRight, sessionId)) {
+        if (tab && tab.kind === 'terminal' && !byId.has(tab.id)) {
+          byId.set(tab.id, { tabId: tab.id, contentId: tab.contentId })
+        }
+      }
+      return [...byId.values()]
+    }
+
+    /** The sidebar tab bound to one Host terminal, or undefined when this window shows none. */
+    function terminalTabOf(sidebarRight, webTerminals, sessionId, terminalId) {
+      for (const tab of terminalTabsOf(sidebarRight, sessionId)) {
+        if (tabShowsTerminal(sidebarRight, webTerminals, sessionId, tab.tabId, tab.contentId, terminalId)) return tab
+      }
+      return undefined
+    }
+
+    /**
+     * Expand the column when needed and select one tab.
+     *
+     * Sidebar commands throw while the Session's store has not been minted yet,
+     * so a failed attempt is reported instead of escaping. The read-back keeps a
+     * silent no-op (an unadopted surface ignores `focus`) from counting as done.
+     *
+     * @returns whether the column reports that tab active afterwards.
+     */
+    function focusSidebarTab(sidebarRight, tabId) {
+      try {
+        if (typeof sidebarRight.isExpanded === 'function' && sidebarRight.isExpanded() === false) {
+          sidebarRight.toggleExpanded()
+        }
+      } catch {
+        return false
+      }
+      try {
+        sidebarRight.focus(tabId)
+      } catch {
+        return false
+      }
+      try {
+        const active = sidebarRight.active()
+        return Boolean(active && active.id === tabId)
+      } catch {
+        return false
+      }
+    }
+
+    /**
+     * Open a terminal tab bound to an existing Host terminal, the way the official
+     * terminal UI opens Agent terminals: open the tab with the terminal id in its
+     * parameters, then save the binding so a reload reattaches to that process.
+     *
+     * `openTabIn` writes through the Session's adopted store, so a call issued
+     * before the seat renders does nothing (or throws); the loop retries until
+     * the tab appears or time is up. A committed call makes the tab visible on
+     * the next read, so no retry can duplicate a tab that already exists.
+     *
+     * @returns the new tab's id, or undefined when none could be opened.
+     */
+    async function openBoundTerminalTab(api, sessionId, terminal, deadline) {
+      const sidebarRight = api.sidebarRight
+      if (typeof sidebarRight.openTabIn !== 'function') return undefined
+      const before = new Set(tabsInOf(sidebarRight, sessionId).map((tab) => tab.id))
+      for (;;) {
+        const opened = tabsInOf(sidebarRight, sessionId)
+          .find((tab) => tab.kind === 'terminal' && !before.has(tab.id))
+        if (opened !== undefined) {
+          const webTerminals = api.webTerminals
+          if (webTerminals && typeof webTerminals.bind === 'function') {
+            try {
+              webTerminals.bind(sessionId, opened.contentId, terminal.id)
+            } catch {
+              // The parameters already name the terminal; the binding only adds reload recovery.
+            }
+          }
+          return opened.id
+        }
+        if (Date.now() >= deadline) return undefined
+        try {
+          sidebarRight.openTabIn(sessionId, 'terminal', { params: { terminalId: terminal.id } })
+        } catch {
+          // The seat has not minted its store yet; the next poll retries.
+        }
+        await delay(JUMP_POLL_MS)
+      }
+    }
+
+    /**
+     * Bring one Host terminal on screen after the Session switch.
+     *
+     * Wait for `mounted` first: every sidebar command addresses the store that
+     * the Session's seat mints when it renders, which happens after the selection
+     * changes. Then resolve the tab from the cross-Session inventory, wait until
+     * the restored layout carries it, and expand + select it. A terminal with no
+     * tab is given one only while it is still running — an exited terminal has no
+     * process for a fresh tab to attach to.
+     *
+     * Nothing here may throw: the panel that asked for the jump has closed.
+     */
+    async function revealTerminalTab(api, sessionId, terminal) {
+      const sidebarRight = api.sidebarRight
+      if (!sidebarRight || !terminal) return
+      const deadline = Date.now() + JUMP_TIMEOUT_MS
+      const mounted = sidebarRight.mounted
+      let onScreen
+      for (;;) {
+        try {
+          onScreen = mounted && typeof mounted.getSnapshot === 'function' ? mounted.getSnapshot() : undefined
+        } catch {
+          onScreen = undefined
+        }
+        if (onScreen === sessionId || Date.now() >= deadline) break
+        await delay(JUMP_POLL_MS)
+      }
+      // The switch may have been superseded; never write into another Session.
+      if (onScreen !== sessionId) return
+      let tabId
+      const known = terminalTabOf(sidebarRight, api.webTerminals, sessionId, terminal.id)
+      if (known !== undefined) tabId = known.tabId
+      else if (terminal.state === 'running') tabId = await openBoundTerminalTab(api, sessionId, terminal, deadline)
+      if (tabId === undefined) return
+      while (Date.now() < deadline) {
+        const restored = tabsInOf(sidebarRight, sessionId).some((tab) => tab.id === tabId)
+        if (restored && focusSidebarTab(sidebarRight, tabId)) return
+        await delay(JUMP_POLL_MS)
+      }
+      console.warn('[dsh-terminal-hub] terminal ' + terminal.id + ' could not be shown in session ' + sessionId)
+    }
+    // END terminal-jump helpers
 
     // ── components ───────────────────────────────────────────────────────────
 
@@ -1337,7 +1568,12 @@ window.__ModuleLoader__.load({
 
       // ── actions ────────────────────────────────────────────────────────────
 
-      const jumpNow = (sessionId) => {
+      /**
+       * Switch to the terminal's Session and, when the row names one terminal,
+       * select that terminal's own right-sidebar tab. The Session switch closes
+       * this panel, so the tab work continues on services alone.
+       */
+      const jumpNow = (sessionId, terminal) => {
         const api = apiRef.current
         if (api.missing && api.missing.length > 0) {
           setNotice(tr('panel.missing', { services: api.missing.join(', ') }))
@@ -1353,15 +1589,17 @@ window.__ModuleLoader__.load({
           setNotice(undefined)
         } catch (error) {
           setNotice(tr('jump.failed', { message: messageOf(error) }))
+          return
         }
+        void revealTerminalTab(api, sessionId, terminal).catch(() => {})
       }
 
       /** Delay the jump so a double click on the title can cancel it. */
-      const scheduleJump = (sessionId) => {
+      const scheduleJump = (sessionId, terminal) => {
         if (jumpTimer.current !== undefined) return
         jumpTimer.current = scheduleTimeout(() => {
           jumpTimer.current = undefined
-          jumpNow(sessionId)
+          jumpNow(sessionId, terminal)
         }, JUMP_DELAY_MS)
       }
 
@@ -1375,7 +1613,9 @@ window.__ModuleLoader__.load({
           ? tr('err.methodMissing', { method: result.method })
           : result && result.code === 'client/unexpected-result'
             ? tr('err.unexpectedResult', { value: result.message })
-            : tr('msg.error', { code: result ? result.code : 'client/unknown', message: result ? result.message : '' })
+            : result && result.code === 'hub/cross-session-blocked'
+              ? tr('err.crossSession')
+              : tr('msg.error', { code: result ? result.code : 'client/unknown', message: result ? result.message : '' })
         setRowErrors((previous) => ({ ...previous, [terminalId]: text }))
       }
 
@@ -1586,7 +1826,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               style: S.jump,
               title: tr('terminal.row.hint'),
-              onClick: () => scheduleJump(group.sessionId),
+              onClick: () => scheduleJump(group.sessionId, terminal),
               onDoubleClick: () => beginTitleEdit({ ...terminal, sessionId: group.sessionId }),
             }, [
               h('span', { key: 'titleLine', style: S.titleLine }, titleLine),
@@ -1733,7 +1973,7 @@ window.__ModuleLoader__.load({
       const matchedTerminals = visible.reduce((total, entry) => total + entry.terminals.length, 0)
       const totalTerminals = terminalCountOf(groups)
 
-      // 主机 tab: exactly the launcher candidates the terminal controller reported.
+      // Hosts tab: exactly the launcher candidates the terminal controller reported.
       const candidates = hostsProbe.candidates || []
       const candidateMatchesSearch = (candidate) => needle === ''
         || (candidate.name + ' ' + candidate.path + ' ' + candidate.title).toLowerCase().indexOf(needle) !== -1

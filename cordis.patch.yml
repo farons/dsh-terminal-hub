@@ -2,11 +2,11 @@
 #
 # Installed through the official CLI:
 #
-#   dsh plugin --profile web add link:D:\workplace_dzh\dsh-terminal-hub
+#   dsh plugin --profile web add link:<path-to-this-repo>
 #
 # This patch only inserts the plugin row. The Host half is an empty plugin; the
 # Client half (dsh.client in package.json) registers the sidebar entry and the
-# panel. The 主机 tab reads the terminal controller's shell candidates at
+# panel. The Hosts tab reads the terminal controller's shell candidates at
 # runtime (ctx.webTerminals.launchShells / remote.terminal.shells), so this
 # bundle carries no host configuration of its own: nothing needs syncing here.
 - insert:

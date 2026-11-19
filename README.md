@@ -1,134 +1,150 @@
 # dsh-terminal-hub
 
-> DeepSeek Harness 的**终端总览**插件：一个侧栏面板，列出**所有会话**的终端，显示状态，一键跳回它所属的会话；另带一个**只读的启动器候选清单** Tab（主机 Tab）。
+English | [中文](README.zh.md)
 
-DSH 的终端是**会话所有**的——右侧栏每个会话一块，切到别的会话就看不到之前开的终端。这个插件把"所有终端"聚到一处，解决"我得先想起终端开在哪个会话"的问题。
+> A **terminal overview** plugin for DeepSeek Harness: one sidebar panel that lists the terminals of **every session**, shows their status, and opens the session with the chosen terminal selected. It also adds a read-only **launcher candidates** tab (the Hosts tab).
 
-## 功能
+DSH terminals are **session-owned**: each session keeps its own section of the right sidebar, so switching to another session hides the terminals opened before. This plugin gathers them in one place and answers "which session did I open that terminal in?".
 
-- **跨会话总览**：一次列出所有会话的终端（含当前未打开的会话），按会话分组
-- **点击跳转**：点任意一行，直接切到该终端所属会话
-- **双名显示**：主标题是**显示名**（没有显示名就用**真实标题**，再没有就用 `shell + 短 id`），**真实标题**始终作为灰色副标题可见
-- **状态点**：绿=运行中、灰=已退出、红=已失败，附带来源（用户 / Agent 启动）
-- **副标题**：`真实标题 · shell名 · 启动目录`，完整路径在悬停提示里
-- **自动编号**：同会话 + 同目录 + 同 shell 的终端自动带 `#1 #2`
-- **显示名**：双击标题原地改名，名字只在本面板生效，不改变 DSH 终端顶部的标题
-- **关闭**：二次确认后真正杀掉终端进程（只对当前会话的终端生效）
-- **标签与配色**：给终端加短标签并从 5 色板选色，只在面板内生效
-- **搜索**：一个搜索框同时过滤两个 Tab（显示名 / 真实标题 / 标签 / 目录 / 会话名 / 启动器名与路径）
-- **两个 Tab**：`终端 (N)` / `主机 (M)`，数字是**当前搜索结果**的数量
-- **主机 Tab（只读、无配置）**：直接列出终端控制器实际注册的启动器候选（`name` 去掉 `.cmd` + 完整路径），不做过滤，不提供任何操作按钮
-- **折叠已退出**：已退出与失败的终端默认收起，可展开
-- 元数据存在浏览器 `localStorage`，终端消失后自动清理过期条目
+## Features
 
-## 安装
+- **Cross-session overview** — the terminals of every session at once (including sessions that are not open), grouped by session
+- **Click to select** — click any row to open the session that owns the terminal and select that terminal in the right sidebar; a collapsed sidebar expands automatically
+- **Works without a tab** — if the terminal has no tab in this window yet and is still running, a tab bound to it is opened (the same path the official terminal UI uses for Agent terminals)
+- **Two names** — the main title is the **display name** (falling back to the **real title**, then to `shell + short id`), and the **real title** always stays visible as the grey sub line
+- **Status dot** — green = running, grey = exited, red = failed, with the origin (user / Agent) next to it
+- **Sub line** — `real title · shell · start directory`; the full path is in the hover title
+- **Automatic numbering** — terminals sharing session + directory + shell get `#1 #2`
+- **Display name** — double-click a title to rename it in place; the name lives in this panel only and never changes the DSH terminal header
+- **Close** — a second confirmation really kills the terminal process (only for terminals of the current session)
+- **Tags and colours** — give a terminal a short tag and pick one of five colours; both are panel-local
+- **Search** — one box filters both tabs (display name / real title / tag / directory / session / launcher name and path)
+- **Two tabs** — `Terminals (N)` / `Hosts (M)`; the numbers count **current search results**
+- **Hosts tab (read-only, no configuration)** — lists the launcher candidates the terminal controller actually registered (`name` without `.cmd` plus the full path), unfiltered, with no action buttons
+- **Collapsed exits** — exited and failed terminals start collapsed and can be expanded
+- Metadata lives in the browser's `localStorage`; entries expire once their terminal is gone
 
-从 npm：
+## Install
+
+From npm:
 
 ```sh
 dsh plugin --profile web add dsh-terminal-hub
 ```
 
-从 GitHub（跟最新代码）：
+From GitHub (tracks the latest code):
 
 ```sh
 dsh plugin --profile web add github:<owner>/dsh-terminal-hub
 ```
 
-本地开发：
+Local development:
 
 ```sh
 git clone <repo-url> dsh-terminal-hub
 dsh plugin --profile web add link:$PWD/dsh-terminal-hub
 ```
 
-装完**重启 `dsh web`**（客户端插件在启动时加载进 `window.__DSH_BOOT__`）。之后修改 `client.js` 一般会被 `dsh-client-hmr` 热更新，最多按一次 F5。
+**Restart `dsh web` after installing** (client plugins load into `window.__DSH_BOOT__` at startup). After that, edits to `client.js` are usually hot-updated by `dsh-client-hmr`; at worst press F5 once.
 
-## 工作原理
+## How it works
 
-- 会话清单来自客户端 `ctx.sessions.list`（`SnapshotStore`）
-- 每个会话的终端来自 Host 的 `remote.terminal.list(sessionId)`——**该方法接受任意会话 id（含离线会话）**，这是跨会话总览成立的前提
-- 有终端的会话会额外订阅 `ctx.webTerminals.watch(sessionId, listener)`，拿到实时 roster
-- 跳转走 `ctx.uiWorkspace.openSession(sessionId)`
-- 关闭直接调 `remote.terminal.close(sessionId, id)`。网关用调用方连接自身的 agent 校验 wire 上的 `agentId`，因此**只能操作当前会话的终端**；跨会话会被边界校验拒绝，面板会给出可读提示
-- 显示名只存在浏览器 `localStorage`，不写 Host，也不影响 DSH 的终端顶部标题
-- 主机 Tab 的数据来自 `ctx.webTerminals.launchShells(sessionId, signal)`（官方终端 UI 的路径），失败时退回 `remote.terminal.shells(...)`（内部还会试三种 wire 形状）；它**不读任何插件配置**，也没有内置副本
+- The session list comes from the client's `ctx.sessions.list` (`SnapshotStore`)
+- Each session's terminals come from the Host's `remote.terminal.list(sessionId)` — **the method accepts any session id, including offline ones**, which is what makes the cross-session overview possible
+- Sessions with terminals also subscribe to `ctx.webTerminals.watch(sessionId, listener)` for a live roster
+- The jump calls `ctx.uiWorkspace.openSession(sessionId)`, which only switches sessions
+- Selecting the terminal uses `ctx.sidebarRight`: after the switch the sidebar's seat has to render before its store is minted, so the plugin **waits for `mounted` to become the target session**, then resolves the tab bound to that terminal from the cross-session tab inventory (`sidebarRight.openTabs`) and the controller binding (`webTerminals.boundTerminal`), expands the column when needed and calls `focus(tabId)`
+- When no tab exists and the terminal is still running, it opens one with `sidebarRight.openTabIn(sessionId, 'terminal', { params: { terminalId } })` and binds it with `webTerminals.bind(...)` — the same path the official terminal UI uses for Agent terminals
+- Selection is **asynchronous and time-bounded** (4 s): `openSession` closes this panel first, so the remaining steps touch services only, never React state; every step is read back through `active()`, and a failure leaves a single console warning instead of pretending to succeed
+- Close calls `remote.terminal.close(sessionId, id)` directly. The Gateway validates the wire `agentId` against the calling connection's own agent, so **only the current session's terminals can be operated on**; a cross-session attempt is refused and the panel shows a readable notice
+- Display names live only in the browser's `localStorage`; nothing is written to the Host and the DSH terminal header is untouched
+- The Hosts tab reads `ctx.webTerminals.launchShells(sessionId, signal)` (the official terminal UI's own path) and falls back to `remote.terminal.shells(...)` (which itself tries three wire shapes). It **reads no plugin configuration** and keeps no second copy of the list
 
-## 主机 Tab（只读）
+## The Hosts tab (read-only)
 
-这个 Tab **只读、无配置**：它显示的是终端控制器（`terminal-controller`）在**当前运行环境里实际注册的启动器候选**，所以永远与系统一致，不存在需要维护的第二份清单。
+This tab is **read-only and has no configuration**: it shows the launcher candidates the terminal controller (`terminal-controller`) **actually registered in the running environment**, so it is always in sync with the system and there is no second list to maintain.
 
-### 数据来源
+### Where the data comes from
 
-按顺序尝试，第一条成功就用：
+Tried in order; the first success wins:
 
-1. `ctx.webTerminals.launchShells(sessionId, signal)` —— 官方终端 UI 自己走的路径
-2. `remote.terminal.shells(sessionId, signal)` —— 底层 Remote 兜底
+1. `ctx.webTerminals.launchShells(sessionId, signal)` — the path the official terminal UI itself takes
+2. `remote.terminal.shells(sessionId, signal)` — the lower-level Remote fallback
 
-第 2 条内部仍会依次尝试三种 wire 形状（`{id}` / 裸字符串 / `{agentId}`），并把成功的那一种记下来。
+The second one still tries three wire shapes in turn (`{id}` / a bare string / `{agentId}`) and remembers the shape that worked.
 
-Tab 顶部会显示：
+The top of the tab shows:
 
 ```
-来源：终端候选清单
-18 个候选启动器
-shells() 形状：webTerminals.launchShells · 探测会话：<会话 id>
-只读视图：这里不提供任何操作按钮。
+Source: terminal candidate list
+18 launcher candidates
+shells() shape: webTerminals.launchShells · probe session: <session id>
+Read-only view: no action buttons here.
 ```
 
-### 会话 id 怎么选
+### How the session id is chosen
 
-`shells()` 的 agent 参数由网关查表（`agentId` lookup）并按**调用方连接**授权，因此插件按 `ctx.sessions.list` 快照**逐个试**（最多前 16 个），**第一个成功返回的**就用，并把它的 id 显示在来源行。
+`shells()`'s agent parameter is resolved by the Gateway (`agentId` lookup) and authorised against the **calling connection**, so the plugin **tries sessions in order** from the `ctx.sessions.list` snapshot (at most the first 16), uses the **first one that answers**, and shows that id on the source line.
 
-全部失败时：
+When every attempt fails:
 
-- 顶部黄条：`读取启动器候选失败：<code>: <message>`（最后一次失败的原始 code/message）
-- 列表区：`候选清单不可用，所以这里没有可列出的启动器。` 以及已尝试的会话数
+- A yellow bar at the top: `Reading launcher candidates failed: <code>: <message>` (the raw code/message of the last failure)
+- The list area: `The candidate list is unavailable, so there is nothing to list here.` plus the number of sessions tried
 
-**不会**把"读不到"显示成"没有启动器"，也不会显示一个不作解释的空列表。
+**Never** is "could not read" shown as "no launchers", and never is an empty list shown without an explanation.
 
-### 行内容
+### Row contents
 
-| 位置 | 内容 |
+| Position | Content |
 |---|---|
-| 主标题 | 候选的 `name`，去掉 `.cmd` 后缀（如 `web-01`） |
-| 副行（灰色） | 候选的完整 `path`（悬停也显示完整路径） |
-| 排序 | 按主标题（即 `name`）升序 |
-| 搜索 | 匹配 `name` 与 `path`（共用顶部搜索框） |
+| Main title | The candidate's `name` without the `.cmd` suffix (e.g. `web-01`) |
+| Sub line (grey) | The candidate's full `path` (the hover title shows it too) |
+| Order | Ascending by main title (that is, by `name`) |
+| Search | Matches `name` and `path` (shares the top search box) |
 
-候选**不做任何过滤**：即使某个启动器不在 `~/.dsh/ssh-hosts` 下，也照样列出——这个 Tab 的意义就是"看这台机器上有什么"。
+Candidates are **not filtered at all**: a launcher outside `~/.dsh/ssh-hosts` is listed just the same — the point of this tab is "what does this machine actually have".
 
-## 已知限制
+## Known limitations
 
-- **不是跨会话接管**：面板负责"看见 + 导航"，不能把别的会话的终端搬到当前会话里操作
-- **启动目录不会跟随 `cd`**：`cwd` 是终端的启动目录，不是实时目录
-- **显示名与颜色只在本面板可见**：DSH 的终端顶部标题由终端 UI 自己持有，本插件不修改它
-- **关闭跨会话不可用**：网关边界校验只放行调用方自己会话的终端
-- **主机 Tab 依赖网关授权**：`shells()` 的 agent 参数按调用方连接校验；如果所有候选会话都被拒，Tab 只会给出错误 code/message，不会伪造列表
-- **离线会话的终端**：Host 只在进程生命周期内保留终端，DSH 重启后旧终端自然消失
-- 一次最多扫描 400 个会话，超出会在面板里提示
+- **Selection needs the right-sidebar service** — on DSH versions without `sidebarRight`, a click degrades to switching the session only (no error, and no fake selection)
+- **An exited terminal with no tab gets none** — the jump only switches to its session; there is no process for a new tab to attach to, so it would only show "unavailable"
+- **The 4 s selection window** — if the session's sidebar seat does not render in time (a frozen UI, for example), the plugin gives up focusing and leaves one console warning; the session switch itself still happens
+- **Not cross-session takeover** — the panel sees, navigates and selects; it cannot move another session's terminal into the current session
+- **The start directory does not follow `cd`** — `cwd` is where the terminal started, not its live directory
+- **Display names and colours are panel-local** — DSH's terminal header is owned by the terminal UI; this plugin does not change it
+- **Close is cross-session-limited** — the Gateway boundary only admits the caller's own session terminals
+- **The Hosts tab depends on Gateway authorisation** — `shells()`'s agent parameter is checked against the calling connection; if every candidate session is refused, the tab shows the error code/message and never invents a list
+- **Terminals of offline sessions** — the Host keeps terminals only for the life of its process; they are gone after a DSH restart
+- At most 400 sessions are scanned; the panel says so when there are more
 
-## 兼容性
+## Compatibility
 
-- 需要 `dsh >= 0.2.0`
-- 依赖 DSH 内置客户端的 `sessions` / `webTerminals` / `uiWorkspace` / `slots` / `locale` 服务与 `terminal-controller` 的 Remote 方法
-- 这些是 DSH 内部 API，**升级 DSH 后可能需要适配**
+- Requires `dsh >= 0.2.0`
+- Depends on the built-in client services `sessions` / `webTerminals` / `uiWorkspace` / `sidebarRight` / `slots` / `locale`, and on the `terminal-controller` Remote methods and bindings
+- These are DSH-internal APIs, so **a DSH upgrade may need adaptation** (`tabsIn` / `openTabIn` / `tabDomain` are not on `ISidebarRight`'s type surface but exist at runtime; run the tests after upgrading)
+- The UI ships both English and Chinese dictionaries; DSH picks the one matching the user's locale
 
-## 开发
+## Development
 
 ```sh
 git clone <repo>
 dsh plugin --profile web add link:$PWD
 ```
 
-`client.js` 是手写的浏览器 bundle，格式为：
+`client.js` is a hand-written browser bundle in this shape:
 
 ```js
-window.__ModuleLoader__.load({ id: '<包名>', factory(require) { ... return { inject, apply } } })
+window.__ModuleLoader__.load({ id: '<package>', factory(require) { ... return { inject, apply } } })
 ```
 
-无构建步骤，`node --check client.js` 可做语法校验。
+There is no build step; `node --check client.js` checks the syntax. Tests:
 
-## 许可
+```sh
+npm test    # node --test: selection logic + module wiring, no browser required
+```
+
+`test/jump.test.mjs` reads `client.js` and evaluates the source between the `// BEGIN/END terminal-jump helpers` sentinels (the contract lives in the same file), then drives the selection flow with fake `sidebarRight` / `webTerminals` services.
+
+## Licence
 
 MIT
